@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Rain, Wind, Lightning & Audio</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #080c14;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      cursor: crosshair;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+    }
+    #prompt {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(200, 220, 255, 0.7);
+      font-family: system-ui, sans-serif;
+      font-size: 1.1rem;
+      pointer-events: none;
+      transition: opacity 0.5s;
+    }
+  </style>
+</head>
+<body>
+  <div id="prompt">Click anywhere to start sound & lightning</div>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const promptText = document.getElementById('prompt');
+
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+
+    let wind = 0;
+    let targetWind = 0;
+    let flashOpacity = 0;
+
+    // --- Web Audio API Setup ---
+    let audioCtx = null;
+    let rainGainNode = null;
+    let rainFilter = null;
+
+    function initAudio() {
+      if (audioCtx) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Ambient Rain Generator (White Noise + Bandpass Filtering)
+      const bufferSize = audioCtx.sampleRate * 2;
+      const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+
+      const whiteNoise = audioCtx.createBufferSource();
+      whiteNoise.buffer = noiseBuffer;
+      whiteNoise.loop = true;
+
+      // Lowpass filter to dampen noise into soft rainfall sound
+      rainFilter = audioCtx.createBiquadFilter();
+      rainFilter.type = 'lowpass';
+      rainFilter.frequency.setValueAtTime(1000, audioCtx.currentTime);
+
+      rainGainNode = audioCtx.createGain();
+      rainGainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+
+      whiteNoise.connect(rainFilter);
+      rainFilter.connect(rainGainNode);
+      rainGainNode.connect(audioCtx.destination);
+
+      whiteNoise.start();
+    }
+
+    function playThunderSound() {
+      if (!audioCtx) return;
+
+      const now = audioCtx.currentTime;
+
+      // Low-frequency rumble oscillator
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(60, now);
+      osc.frequency.exponentialRampToValueAtTime(20, now + 1.8);
+
+      // Noise burst for crackle
+      const bufferSize = audioCtx.sampleRate * 1.5;
+      const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = noiseBuffer;
+
+      // Lowpass filter for deep thunder boom
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(250, now);
+      filter.frequency.exponentialRampToValueAtTime(40, now + 1.5);
+
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.8, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 1.8);
+
+      osc.connect(filter);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start(now);
+      noise.start(now);
+      osc.stop(now + 1.8);
+      noise.stop(now + 1.8);
+    }
+
+    // --- Interactive Controls ---
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      const normalizedX = (e.clientX / width) * 2 - 1;
+      targetWind = normalizedX * 14;
+
+      // Dynamically adjust rain filter frequency with wind movement
+      if (rainFilter && audioCtx) {
+        const targetFreq = 800 + Math.abs(normalizedX) * 800;
+        rainFilter.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
+      }
+    });
+
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 0) {
+        const normalizedX = (e.touches[0].clientX / width) * 2 - 1;
+        targetWind = normalizedX * 14;
+      }
+    });
+
+    function triggerLightningAndThunder() {
+      if (!audioCtx) {
+        initAudio();
+        promptText.style.opacity = '0';
+      } else if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+
+      flashOpacity = 0.85;
+      setTimeout(() => { flashOpacity = 0.4; }, 80);
+      setTimeout(() => { flashOpacity = 0.7; }, 140);
+      setTimeout(() => { flashOpacity = 0.2; }, 220);
+
+      playThunderSound();
+    }
+
+    window.addEventListener('click', triggerLightningAndThunder);
+    window.addEventListener('touchstart', triggerLightningAndThunder);
+
+    // --- Animation Logic ---
+    const ripples = [];
+
+    class Ripple {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 1;
+        this.maxRadius = Math.random() * 12 + 6;
+        this.opacity = 0.6;
+        this.speed = Math.random() * 0.4 + 0.3;
+      }
+
+      update() {
+        this.radius += this.speed;
+        this.opacity -= 0.02;
+      }
+
+      draw() {
+        if (this.opacity <= 0) return;
+        ctx.beginPath();
+        ctx.ellipse(this.x, this.y, this.radius, this.radius * 0.3, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(174, 210, 240, ${this.opacity})`;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+    }
+
+    class Drop {
+      constructor() {
+        this.reset(true);
+      }
+
+      reset(initial = false) {
+        this.x = Math.random() * (width + 800) - 400;
+        this.y = initial ? Math.random() * height : -30;
+        this.length = Math.random() * 20 + 12;
+        this.speed = Math.random() * 10 + 12;
+        this.opacity = Math.random() * 0.45 + 0.15;
+        this.width = Math.random() * 1.5 + 0.5;
+      }
+
+      update() {
+        this.x += wind;
+        this.y += this.speed;
+
+        if (this.y >= height - 5) {
+          if (Math.random() > 0.4) {
+            ripples.push(new Ripple(this.x, height - Math.random() * 10));
+          }
+          this.reset();
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y);
+        ctx.lineTo(this.x + wind * 1.8, this.y + this.length);
+        ctx.strokeStyle = `rgba(174, 200, 235, ${this.opacity + flashOpacity * 0.3})`;
+        ctx.lineWidth = this.width;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+    }
+
+    const dropCount = Math.floor((width * height) / 2500);
+    const drops = Array.from({ length: dropCount }, () => new Drop());
+
+    function animate() {
+      wind += (targetWind - wind) * 0.05;
+
+      ctx.fillStyle = 'rgba(8, 12, 20, 0.28)';
+      ctx.fillRect(0, 0, width, height);
+
+      if (flashOpacity > 0.01) {
+        ctx.fillStyle = `rgba(215, 230, 255, ${flashOpacity})`;
+        ctx.fillRect(0, 0, width, height);
+        flashOpacity *= 0.88;
+      }
+
+      drops.forEach(drop => {
+        drop.update();
+        drop.draw();
+      });
+
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        ripples[i].update();
+        ripples[i].draw();
+        if (ripples[i].opacity <= 0) {
+          ripples.splice(i, 1);
+        }
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
